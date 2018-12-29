@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Optional, Any, Dict, Union, Iterable
 from timeit import default_timer as timer
 
+import msgpack
+
 from node import TreeNode, Node
 
 
@@ -24,6 +26,7 @@ class FileType(Enum):
     """
     PICKLE = 'pickle'
     CSV = 'csv'
+    MSGPACK = 'msgpack'
     
     def path(self, stem: str) -> str:
         return f"./data/{self.value}/{stem}.{self.value}"
@@ -100,7 +103,10 @@ class Customs:
                 for line in r:
                     self.dict[line['id']] = Node(**line)
                 return self.dict
-            
+        elif self.filetype == FileType.MSGPACK:
+            with open(fn, "rb") as f:
+                return msgpack.unpack(f)
+
     def write(self, kind: FileType) -> None:
         fn = self._path(kind)
         if kind == FileType.PICKLE:
@@ -110,8 +116,14 @@ class Customs:
             with open(fn, "w") as f:
                 w = csv.DictWriter(f, Node._fields)
                 w.writeheader()
-                for item in self.treenode.iter():
+                for item in self.treenode.node_iter():
                     w.writerow(item._asdict())
+        elif kind == FileType.MSGPACK:
+            data = []
+            for item in self.treenode.node_iter():
+                data.append(item._asdict())
+            with open(fn, "wb") as f:
+                msgpack.pack(data, f, use_bin_type=True)
 
     def translate(self):
         """ Convert from TreeNode to Dict or vice versa """
@@ -120,7 +132,7 @@ class Customs:
         
         if self.treenode:
             self.dict = {}
-            for item in self.treenode.iter():
+            for item in self.treenode.node_iter():
                 self.dict[item.id] = item
         else:
             def new_key():
@@ -144,6 +156,7 @@ You can also use this script to translate one format to another and validate the
 USE:
     Convert the case_100 test case from pickle to csv
       ./customs.py --case case_100 --import pickle --export csv
+      ./customs.py --case case_5000 --import pickle --export csv
 """
 
 
