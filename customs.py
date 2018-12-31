@@ -1,21 +1,39 @@
 #!/usr/bin/env python3
 """
 I control the import and export of things (to file)
+
+Serialization concerns
+- speed
+- size - only large differences will matter - perhaps 20%
+- model version flexibility - what happens when we change the model
+    - change model code - e.g. pickle stores the actual object, if we fix a bug, we have
+      to translate all existing archives
+    - change field order - if we don't store field name information, do we break all existing archives
+    - add/remove fields - no field names makes this difficult
+
+Lists of protocols
+- protobuf and other fancy things https://gist.github.com/monkeybutter/b91004077be5d73a478a
+- OLD https://gist.github.com/cactus/4073643
 """
 import argparse
 import csv
+import json
+
+import simplejson
+import ujson
+import cbor2
+import cbor
 import pickle
-import sys
 from argparse import RawDescriptionHelpFormatter
 from collections import defaultdict
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Any, Dict, Union, Iterable
 from timeit import default_timer as timer
+from typing import Dict, Union, Callable
 
 import msgpack
 
-from node import TreeNode, Node
+from node import Node, TreeNode
 
 
 class FileType(Enum):
@@ -25,8 +43,27 @@ class FileType(Enum):
     Out[20]: './data/pickle/case_100.pickle'
     """
     PICKLE = 'pickle'
+    CBOR = 'CBOR'
+    CBOR2 = 'CBOR2'
     CSV = 'csv'
+    JSON = 'json'
     MSGPACK = 'msgpack'
+    PROTOBUF = 'protobuf'
+    SIMPLEJSON = 'simplejson'
+    UJSON = 'ujson'
+    
+    @staticmethod
+    def all():
+        return [x for x in FileType.__members__.values()]
+
+    @staticmethod
+    def all_but_pickle():
+        return [x for x in FileType.__members__.values() if x != FileType.PICKLE]
+    
+    @staticmethod
+    def best():
+        poor_perf = [FileType.CSV, FileType.CBOR, FileType.CBOR2]
+        return [x for x in FileType.__members__.values() if x not in poor_perf]
     
     def path(self, stem: str) -> str:
         return f"./data/{self.value}/{stem}.{self.value}"
@@ -68,7 +105,6 @@ class NodeStats:
         for k,v in self.stats.items():
             print(f"{k}\t{v['dirs'] + v['files']}\t{v['dirs']}\t{v['files']}")
 
-
 class Customs:
     """
     I import and export TreeNodes, id_dict
@@ -85,31 +121,68 @@ class Customs:
     def __init__(self, stem: str, source_kind: FileType):
         self.stem = stem
         self.filetype = source_kind
+        
+        # Our 3 data formats are views into the same collection of Nodes for size/speed
+        # - change one Node, change all collections
         self.treenode: TreeNode = None
         # Node.id -> Node
         self.id_dict: Dict[int, Node] = {}
-        # Node.id -> TreeNode
-        self.tn_dict: Dict[int, TreeNode] = defaultdict(list)
+        # Node.id -> TreeNode (only dirs)
+        self.tn_dict: Dict[int, TreeNode] = {}
+        
+        # Storing data as a list is 2-3 times slower because of all the dict constructs
+        # For simplejson, it does not matter because it stores key names when archiving NT,
+        # but it is always slower than others
+        self.json_data_is_list = True
     
     def _path(self, kind: FileType=None) -> str:
         if not kind:
             kind = self.filetype
         return kind.path(self.stem)
     
-    def _to_dict(self):
+    def to_dict_list(self):
+        # TODO: If we choose a json, we could manually code a Node export format to avoid dict construction and encoding
+        return [x._asdict() for x in self.id_dict.values()]
+
+    def _json_read(self, fn: str, load_func: Callable) -> Dict[int, Node]:
         """
-        Return id_dict as plain dict - for serialization
-        
-        Note: we don't cache this as a data member because the main intent of this class
-              is to benchmark serialization and that is one of the costs
+        Consolidate json logic here - so we can change it on all for any particular run
         """
-        if not self.id_dict:
-            self.translate()
-        result = {}
-        for k,v in self.id_dict.items():
-            result[k] = v._asdict()
-        return result
-        
+        with open(fn, "r") as f:
+            self.id_dict = {}
+            if self.json_data_is_list:
+                for item in load_func(f):
+                    self.id_dict[item['id']] = Node(**item)
+            else:
+                for v in load_func(f).values():
+                    self.id_dict[v[0]] = Node._make(v)
+        return self.id_dict
+
+    def _json_dump(self, fn: str, dump_func: Callable) -> None:
+        """
+        Consolidate json logic here - so we can change it on all for any particular run
+
+        python's built in json looks to be the fastest of its type, but still 1/4 speed of pickle
+        Options
+        - Use the id_dict: NamedTuples serialize without key names so encoded data is a list of fields.
+          Every time we add/remove/change name/ change order, we break all archives - Basically the same
+          problems as pickle (except that encodes the structures as well).
+          BUT - it is 2x perf
+        - Use a list of NT._asdict. Slows speed to 1/2 of id_dict approach, but solves robustness problems
+        - Refactor out the NamedTuples. This avoids all the _asdict constructions, but living with it
+          would be much less pleasant
+        - Implement a c extension. What would we fix?
+
+        NOTE: this remains constant perf for all test cases. It beats pickle on the home case
+        TODO: decide on a best approach
+        """
+        with open(fn, "w") as f:
+            if self.json_data_is_list:
+                # Slower because of all the dict constructs
+                dump_func(self.to_dict_list(), f)
+            else:
+                dump_func(self.id_dict, f)
+
     def read(self) -> Union[Dict, TreeNode]:
         """
         I return the best representation the source format supports
@@ -132,12 +205,38 @@ class Customs:
                     self.id_dict[int(line['id'])] = Node(**line)
                 return self.id_dict
         elif self.filetype == FileType.MSGPACK:
+            # TODO: This will fail with larger files - have to adjust max_xxx_len
             with open(fn, "rb") as f:
-                # TODO: this does not throw errors on failure
-                d = msgpack.unpack(f, raw=False)
                 self.id_dict = {}
-                for k,v in d.items():
-                    self.id_dict[k] = Node(**v)
+                for item in msgpack.unpack(f, raw=False):
+                    self.id_dict[item['id']] = Node(**item)
+            return self.id_dict
+        elif self.filetype == FileType.JSON:
+            return self._json_read(fn, json.load)
+        elif self.filetype == FileType.UJSON:
+            return self._json_read(fn, ujson.load)
+        elif self.filetype == FileType.SIMPLEJSON:
+            # NOTE: simplejson includes key names when serializing NamedTuples
+            with open(fn, "r") as f:
+                self.id_dict = {}
+                if self.json_data_is_list:
+                    for item in simplejson.load(f):
+                        self.id_dict[item['id']] = Node(**item)
+                else:
+                    for v in simplejson.load(f).values():
+                        self.id_dict[v['id']] = Node(**v)
+            return self.id_dict
+        elif self.filetype == FileType.CBOR2:
+            with open(fn, "rb") as f:
+                self.id_dict = {}
+                for item in cbor2.load(f):
+                    self.id_dict[item['id']] = Node(**item)
+            return self.id_dict
+        elif self.filetype == FileType.CBOR:
+            with open(fn, "rb") as f:
+                self.id_dict = {}
+                for item in cbor.load(f):
+                    self.id_dict[item['id']] = Node(**item)
             return self.id_dict
 
     def write(self, kind: FileType) -> None:
@@ -145,7 +244,7 @@ class Customs:
         if kind == FileType.PICKLE:
             # serialize as TreeNode
             with open(fn, "wb") as f:
-                pickle.dump(self.treenode, f)
+                pickle.dump(self.treenode, f, protocol=-1)
         elif kind == FileType.CSV:
             # serialize as id_dict
             with open(fn, "w") as f:
@@ -154,11 +253,35 @@ class Customs:
                 for item in self.treenode.node_iter():
                     w.writerow(item._asdict())
         elif kind == FileType.MSGPACK:
-            # serialize as id_dict
+            # https://msgpack-python.readthedocs.io/en/latest/api.html
             with open(fn, "wb") as f:
                 # Doesn't improve speed
                 # msgpack.pack(self._to_dict(), f, use_bin_type=True)
-                msgpack.pack(self._to_dict(), f)
+                msgpack.pack(self.to_dict_list(), f)
+        elif kind == FileType.JSON:
+            self._json_dump(fn, json.dump)
+        elif kind == FileType.UJSON:
+            self._json_dump(fn, ujson.dump)
+        elif kind == FileType.SIMPLEJSON:
+            # NOTE: simplejson includes key names when serializing NamedTuples
+            with open(fn, "w") as f:
+                if self.json_data_is_list:
+                    simplejson.dump(list(self.id_dict.values()), f)
+                else:
+                    simplejson.dump(self.id_dict, f)
+        elif kind == FileType.CBOR2:
+            with open(fn, "wb") as f:
+                cbor2.dump(self.to_dict_list(), f)
+        elif kind == FileType.CBOR:
+            with open(fn, "wb") as f:
+                cbor.dump(self.to_dict_list(), f)
+        # TODO: protobuf: https://developers.google.com/protocol-buffers/docs/pythontutorial
+        #       pyrobuf
+        # TODO: Thrift?
+        # TODO: arrow?
+        # TODO: python-rapidjson
+        # TODO: bson
+        # TODO: HDF5
 
     def translate(self):
         """
@@ -166,16 +289,13 @@ class Customs:
         this method to ensure all source formats are available.
         Assumes we have
         """
-        if self.treenode is None and self.id_dict is None:
-            raise ValueError("No internal format to translate.")
-        
         if self.treenode:
-            # Create id_dict from TreeNode
+            # Create id_dict from TreeNode - only pickle
             self.id_dict = self.treenode.to_id_dict()
             self.tn_dict = self.treenode.to_tn_dict()
-        else:
-            # Create TreeNode from id_dict
-            # Assume we are the only ones creating tn_dict
+        elif self.id_dict:
+            # Create TreeNode from id_dict - all other serializations
+            # If serialization produces an id_dict, we must create the tn_dict
             self.tn_dict = {}
             for id, node in self.id_dict.items():
                 if node.is_dir():
@@ -193,11 +313,10 @@ class Customs:
             for node in self.id_dict.values():
                 if not node.is_dir():
                     self.tn_dict[node.parent_id].files.append(node)
-            
-            # Finally, create the id_dict
-            self.id_dict = self.treenode.to_id_dict()
-    
-    
+        else:
+            raise ValueError("No internal format to translate.")
+
+
 def help():
     return """Customs controls file import and export
 
@@ -232,11 +351,11 @@ def main():
     args = parser.parse_args()
 
     if args.import_type.upper() not in FileType.__members__:
-        print(f"import-type must be one of {', '.join(FileType.__members__.keys())}")
+        print(f"import-type must be one of {', '.join(FileType.__members__)}")
         exit(1)
 
     if args.export_type.upper() not in FileType.__members__:
-        print(f"export-type must be one of {', '.join(FileType.__members__.keys())}")
+        print(f"export-type must be one of {', '.join(FileType.__members__)}")
         exit(1)
 
     ift = FileType(args.import_type)

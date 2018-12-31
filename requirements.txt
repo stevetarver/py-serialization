@@ -1,3 +1,6 @@
 -c constraints.txt
 
 msgpack
+simplejson
+ujson
+cbor2

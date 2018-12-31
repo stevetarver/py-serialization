@@ -61,6 +61,26 @@ class Node(NamedTuple):
     def is_dir(self):
         return self.tag[0] == "D"
     
+    def to_json(self):
+        """
+        For serialization. If we manually encode our json, we avoid the dict construction
+        and encoding with the json codec.
+        
+        NOTES:
+        - This improves write speed, not read speed.
+        - Fragile - if data members change, need to keep this updated
+        """
+        # generation code
+        # result = "f'{{"
+        # for name, cls in Node._field_types.items():
+        #     if cls == str:
+        #         result += f'"{name}":"{{self.{name}}}",'
+        #     else:
+        #         result += f'"{name}":{{self.{name}}},'
+        # result += "}}'"
+        # print(result)
+        return f'{{"id":{self.id},"tag":"{self.tag}","name":"{self.name}","parent_id":{self.parent_id},"stem":"{self.stem}","extension":"{self.extension}","path":"{self.path}","size":{self.size},"owner":{self.owner},"group":{self.group},"created":{self.created},"accessed":{self.accessed},"modified":{self.modified},"owner_perm":{self.owner_perm},"group_perm":{self.group_perm},"other_perm":{self.other_perm}}}'
+    
     def __str__(self):
         return f"{self.name}   ({self.tag}: {self.path})"
     

@@ -13,7 +13,7 @@ from customs import Customs, FileType
 from node import Node, TreeNode
 
 CASE_INFO = {
-    'case_proj': {'nodes': 43, 'dirs': 10, 'files': 33},
+    'case_proj': {'nodes': 64, 'dirs': 15, 'files': 49},
     'case_100': {'nodes': 117, 'dirs': 35, 'files': 82},
     'case_200': {'nodes': 225, 'dirs': 35, 'files': 190},
     'case_300': {'nodes': 333, 'dirs': 56, 'files': 277},
@@ -30,7 +30,7 @@ CASE_INFO = {
     'case_4000': {'nodes': 3977, 'dirs': 216, 'files': 3761},
     'case_5000': {'nodes': 5035, 'dirs': 289, 'files': 4746},
     'case_10000': {'nodes': 9651, 'dirs': 1079, 'files': 8572},
-    'case_home': {'nodes': 328995, 'dirs': 51071, 'files': 277924},
+    'case_home': {'nodes': 329267, 'dirs': 51095, 'files': 278172},
 }
 
 

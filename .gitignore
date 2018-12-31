@@ -103,7 +103,12 @@ venv.bak/
 .mypy_cache/
 
 /.idea
+/data/cbor/*
+/data/cbor2/*
 /data/csv/*
 /data/json/*
 /data/msgpack/*
 /data/pickle/*
+/data/protobuf/*
+/data/simplejson/*
+/data/ujson/*
