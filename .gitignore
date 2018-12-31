@@ -103,4 +103,7 @@ venv.bak/
 .mypy_cache/
 
 /.idea
-/data/
+/data/csv/*
+/data/json/*
+/data/msgpack/*
+/data/pickle/*

@@ -70,20 +70,45 @@ class NodeStats:
 
 
 class Customs:
-    """ I import and export TreeNodes
-    TODO: We need tree node to infer properties when inherited from parent
+    """
+    I import and export TreeNodes, id_dict
+    Assumptions:
+    - on write, the treenode and id_dict have already been generated
+    
+    NOTES:
+    - We need a TreeNode structure so descendents can inherit properties
+    - This class is used in benchmarking serialization - completely writing and reading
+      to restore both the TreeNode and id_dict. Converting to a serialization form and
+      reconstructing both collections is included in the cost for each encoding.
     """
     
     def __init__(self, stem: str, source_kind: FileType):
         self.stem = stem
         self.filetype = source_kind
-        self.treenode = None
-        self.dict = None
+        self.treenode: TreeNode = None
+        # Node.id -> Node
+        self.id_dict: Dict[int, Node] = {}
+        # Node.id -> TreeNode
+        self.tn_dict: Dict[int, TreeNode] = defaultdict(list)
     
     def _path(self, kind: FileType=None) -> str:
-        if kind:
-            return kind.path(self.stem)
-        return self.filetype.path(self.stem)
+        if not kind:
+            kind = self.filetype
+        return kind.path(self.stem)
+    
+    def _to_dict(self):
+        """
+        Return id_dict as plain dict - for serialization
+        
+        Note: we don't cache this as a data member because the main intent of this class
+              is to benchmark serialization and that is one of the costs
+        """
+        if not self.id_dict:
+            self.translate()
+        result = {}
+        for k,v in self.id_dict.items():
+            result[k] = v._asdict()
+        return result
         
     def read(self) -> Union[Dict, TreeNode]:
         """
@@ -97,57 +122,82 @@ class Customs:
                 self.treenode = pickle.load(f)
                 return self.treenode
         elif self.filetype == FileType.CSV:
-            self.dict = {}
+            self.id_dict = {}
             with open(fn, "r") as f:
                 r = csv.DictReader(f)
                 for line in r:
-                    self.dict[line['id']] = Node(**line)
-                return self.dict
+                    # type conversion
+                    for field in [k for k,v in Node._field_types.items() if v != str]:
+                        line[field] = int(line[field])
+                    self.id_dict[int(line['id'])] = Node(**line)
+                return self.id_dict
         elif self.filetype == FileType.MSGPACK:
             with open(fn, "rb") as f:
-                return msgpack.unpack(f)
+                # TODO: this does not throw errors on failure
+                d = msgpack.unpack(f, raw=False)
+                self.id_dict = {}
+                for k,v in d.items():
+                    self.id_dict[k] = Node(**v)
+            return self.id_dict
 
     def write(self, kind: FileType) -> None:
         fn = self._path(kind)
         if kind == FileType.PICKLE:
+            # serialize as TreeNode
             with open(fn, "wb") as f:
                 pickle.dump(self.treenode, f)
         elif kind == FileType.CSV:
+            # serialize as id_dict
             with open(fn, "w") as f:
                 w = csv.DictWriter(f, Node._fields)
                 w.writeheader()
                 for item in self.treenode.node_iter():
                     w.writerow(item._asdict())
         elif kind == FileType.MSGPACK:
-            data = []
-            for item in self.treenode.node_iter():
-                data.append(item._asdict())
+            # serialize as id_dict
             with open(fn, "wb") as f:
-                msgpack.pack(data, f, use_bin_type=True)
+                # Doesn't improve speed
+                # msgpack.pack(self._to_dict(), f, use_bin_type=True)
+                msgpack.pack(self._to_dict(), f)
 
     def translate(self):
-        """ Convert from TreeNode to Dict or vice versa """
-        if self.treenode is None and self.dict is None:
-            raise ValueError("No internal format to operate on.")
+        """
+        We serialize either a TreeNode or an id_dict. After reading, call
+        this method to ensure all source formats are available.
+        Assumes we have
+        """
+        if self.treenode is None and self.id_dict is None:
+            raise ValueError("No internal format to translate.")
         
         if self.treenode:
-            self.dict = {}
-            for item in self.treenode.node_iter():
-                self.dict[item.id] = item
+            # Create id_dict from TreeNode
+            self.id_dict = self.treenode.to_id_dict()
+            self.tn_dict = self.treenode.to_tn_dict()
         else:
-            def new_key():
-                return dict(files=[], dirs=[])
-            temp = defaultdict(new_key)
-            for node in self.dict.values():
-                # Group all nodes by path
+            # Create TreeNode from id_dict
+            # Assume we are the only ones creating tn_dict
+            self.tn_dict = {}
+            for id, node in self.id_dict.items():
                 if node.is_dir():
-                    temp[node.path]['dirs'].append(node)
+                    self.tn_dict[id] = TreeNode(me=node, files=[], dirs=[])
+                    
+            # Define dir hierarchy
+            # Also identify root node to remove one tn_dict traversal
+            for tn in self.tn_dict.values():
+                if not tn.me.parent_id:
+                    self.treenode = tn
                 else:
-                    temp[node.path]['files'].append(node)
-            # group all items by path and is dir
-            # traverse result and build TreeNode
-
-
+                    self.tn_dict[tn.me.parent_id].dirs.append(tn)
+                
+            # Merge files into dir hierarchy
+            for node in self.id_dict.values():
+                if not node.is_dir():
+                    self.tn_dict[node.parent_id].files.append(node)
+            
+            # Finally, create the id_dict
+            self.id_dict = self.treenode.to_id_dict()
+    
+    
 def help():
     return """Customs controls file import and export
 

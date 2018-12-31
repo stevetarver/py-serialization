@@ -1,14 +1,14 @@
 import json
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Tuple, Dict
 
 
 class Node(NamedTuple):
     """
     inode metadata, created with Node.new()
     """
-    id: int  # id first simplifies generating csv files
-    tag: str  # TODO: in neo4j, I think this is better named a label - clean up, perhaps 'kind' is a better name
+    id: int  # id first simplifies serialization
+    tag: str  # TODO: this is probably better named kind
     name: str
     parent_id: Optional[int] # None for root node
     stem: str
@@ -20,12 +20,22 @@ class Node(NamedTuple):
     created: int
     accessed: int
     modified: int
-    owner_perm: int  # bits for owner inode perms: 1,2,4
+    owner_perm: int  # bits for owner inode perms: 4,2,1 (r,w,x)
     group_perm: int
     other_perm: int
 
     @staticmethod
     def new(path: Path) -> "Node":
+        """
+        Many ways to make a NamedTuple - all basically equal perf
+            new_dict	    0.000053
+            new_positional	0.000053
+            make_dict	    0.000053
+            make_list	    0.000058
+            make_named	    0.000053
+            make_positional	0.000053
+        Note: Constructing Nodes from file info is limited to about 19,000 n/s
+        """
         p = path.resolve(strict=True)
         stats = p.stat()
         data = {
@@ -35,7 +45,7 @@ class Node(NamedTuple):
             "name": p.name,
             "stem": p.stem,
             "extension": p.suffix[1:],  # omit the leading dot
-            "path": f"{p.absolute()}",
+            "path": f"{p.absolute()}",  # convert PosixPath to string
             "size": stats.st_size,
             "created": int(stats.st_ctime),
             "accessed": int(stats.st_atime),
@@ -49,11 +59,14 @@ class Node(NamedTuple):
         return Node(**data)
 
     def is_dir(self):
-        return self.tag.startswith("Dir")
+        return self.tag[0] == "D"
+    
+    def __str__(self):
+        return f"{self.name}   ({self.tag}: {self.path})"
     
     def __repr__(self):
         # Pretty cool, but Neo4j doesn't like the double quoted property names
-        return f"({self.tag} {json.dumps(self._asdict(), sort_keys=True, default=str)})"
+        return f"({self.name} {json.dumps(self._asdict(), sort_keys=True, default=str)})"
 
 
 class TreeNode(NamedTuple):
@@ -65,7 +78,7 @@ class TreeNode(NamedTuple):
         """
         Add an item to the proper collection in this node
         :param p: Path object to add
-        :return: a TreeNode object if one was created (to hold a Dir Node)
+        :return: a new TreeNode object if one was created (to hold a Dir Node), self unless exception
         """
         try:
             node = Node.new(p)
@@ -77,14 +90,25 @@ class TreeNode(NamedTuple):
                 return self.dirs[-1]
             else:
                 self.files.append(node)
-            return node
+            return self
     
+    @staticmethod
     def new(p: Path) -> "TreeNode":
-        """
-        Create a new TreeNode - used only to create the root node, then use add()
-        """
+        """ Create a new TreeNode - used only to create the root node, then use add() """
         return TreeNode(me=Node.new(p), files=[], dirs=[])
-    
+
+    def node_counts(self) -> Tuple[int, int]:
+        """ Return the count of dirs, files in this hierarchy """
+        # TODO this would be faster using the TreeNode.__iter__
+        dirs = 0
+        files = 0
+        for item in self.node_iter():
+            if item.is_dir():
+                dirs += 1
+            else:
+                files += 1
+        return dirs, files
+
     def node_iter(self) -> Node:
         """
         A recursive generator - producing nodes (stripping out the TreeNode part)
@@ -99,7 +123,34 @@ class TreeNode(NamedTuple):
     
     def print(self, indent=0) -> None:
         print(f"{' ' * indent}{self.me}")
-        for d in self.dirs:
-            d.print(indent + 2)  # recurse subtree
         for f in self.files:
             print(f"{' ' * (indent + 2)}{f}")
+        for d in self.dirs:
+            d.print(indent + 2)  # recurse subtree
+
+    def to_id_dict(self) -> Dict[int, Node]:
+        """ Convert this TreeNode hierarchy to an inode keyed dict of Node """
+        result = {}
+        for item in self.node_iter():
+            result[item.id] = item
+        return result
+    
+    def to_tn_dict(self) -> Dict[int, "TreeNode"]:
+        """ Convert this hierarchy to an inode -> TreeNode dict """
+        result = {}
+        for item in self.iter():
+            result[item.me.id] = item
+        return result
+
+    # TODO: This is blowing up ./generator.py -d as __iter__; refine use for NT
+    def iter(self):
+        """
+        Iterate over TreeNode objects in hierarchy
+          for item in TreeNode.iter():
+        """
+        yield self
+        for d in self.dirs:
+            yield from d.iter()
+
+    def __str__(self):
+        return f"TreeNode {self.me.name} (files: {len(self.files)}, dirs: {len(self.dirs)}, path: {self.me.path})"

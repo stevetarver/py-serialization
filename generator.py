@@ -13,6 +13,7 @@ from customs import Customs, FileType
 from node import Node, TreeNode
 
 CASE_INFO = {
+    'case_proj': {'nodes': 43, 'dirs': 10, 'files': 33},
     'case_100': {'nodes': 117, 'dirs': 35, 'files': 82},
     'case_200': {'nodes': 225, 'dirs': 35, 'files': 190},
     'case_300': {'nodes': 333, 'dirs': 56, 'files': 277},
@@ -29,7 +30,7 @@ CASE_INFO = {
     'case_4000': {'nodes': 3977, 'dirs': 216, 'files': 3761},
     'case_5000': {'nodes': 5035, 'dirs': 289, 'files': 4746},
     'case_10000': {'nodes': 9651, 'dirs': 1079, 'files': 8572},
-    'case_home': {'nodes': 328378, 'dirs': 50991, 'files': 277387},
+    'case_home': {'nodes': 328995, 'dirs': 51071, 'files': 277924},
 }
 
 
@@ -85,7 +86,7 @@ def print_stats(root: TreeNode, case: str) -> None:
 def remove_root_parent(root: TreeNode) -> TreeNode:
     # Ensure our root node does not have a parent id - to identify it as root
     od = root.me._asdict()
-    od['parent_id'] = None
+    od['parent_id'] = 0
     return TreeNode(Node(**od), root.files, root.dirs)
 
 
@@ -101,7 +102,10 @@ def pickle_default_datasets() -> None:
     """ Generate default datasets, for use with other formats """
     config = configparser.ConfigParser()
     config.read("class-stor.config")
-    
+
+    p = Path.cwd()
+    pickle_dataset(p, "case_proj", {"csv", "json", "msgpack", ".git", ".idea", ".pytest_cache", "__pycache__"})
+
     p = Path(config['generator']['cpython'])
     for case, exclusions in CPYTHON_DIR_EXCLUSIONS.items():
         pickle_dataset(p, case, exclusions)
@@ -111,14 +115,14 @@ def pickle_default_datasets() -> None:
 
     p = Path.home()
     pickle_dataset(p, "case_home", {"appomni", "Library", "private"})
-
+    
 
 def dir_counts_recurse(node: TreeNode, indent: int = 0) -> None:
     """ Print all directories and node counts """
     fc = len(node.files)
     dc = len(node.dirs)
     descendants = 0
-    for item in node.node_iter():
+    for _ in node.node_iter():
         descendants += 1
     print(f"{dc: >4}  {fc: >4}  {descendants: >4}  {' ' * indent}/{node.me.name}")
     for d in node.dirs:
@@ -155,7 +159,7 @@ You can generate additional datasets from any directory:
     ./generate.py -n my_shared_dir -r /Users/shared
 
 You can list subtree descendents and their node counts to help develop other target sized datasets
-    ./generate.py -l -r /Users/shared
+    ./generate.py -l /Users/shared
 """
 
 
@@ -167,36 +171,46 @@ def main():
                         default=False,
                         help='generate default datasets (using default dir)')
     group.add_argument('-l', '--list',
-                        action='store_true',
-                        default=False,
+                        metavar="DIR",
                         help='list node count for each dir in target dir')
     group.add_argument('-r', '--root',
-                        help='root directory - where to start parsing')
+                       metavar="DIR",
+                       help='root directory - where to start parsing')
+    
     parser.add_argument('-n', '--name',
                         default="funky-karmikel",
                         help='use case name - becomes the pickle file name')
     args = parser.parse_args()
+    print(args)
     
     if args.default:
         print("===> Generating default datasets")
         pickle_default_datasets()
+        print("===> REMEMBER: copy the above to generator.py CASE_INFO in case anything has changed.")
         exit(0)
     
-    p = Path(args.root)
-    if not p.exists():
-        print(f"Directory {p} does not exist. Cannot continue.")
-        exit(1)
-    if not p.is_dir():
-        print(f"{p} is not a directory, cannot continue.")
-        exit(1)
-    
-    if args.list:
-        dir_counts(p)
-    elif args.root:
+    if args.root:
+        p = Path(args.root)
+        if not p.exists():
+            print(f"Directory {p} does not exist. Cannot continue.")
+            exit(1)
+        if not p.is_dir():
+            print(f"{p} is not a directory, cannot continue.")
+            exit(1)
         print(f"===> Collecting {p} into a {args.name} pickle")
         start = timer()
-        pickle_dataset(p, args.name)
+        pickle_dataset(p, args.name, set())
         print(f"Operations completed in {timer() - start} seconds")
+
+    if args.list:
+        p = Path(args.list)
+        if not p.exists():
+            print(f"Directory {p} does not exist. Cannot continue.")
+            exit(1)
+        if not p.is_dir():
+            print(f"{p} is not a directory, cannot continue.")
+            exit(1)
+        dir_counts(p)
 
 
 if __name__ == "__main__":
