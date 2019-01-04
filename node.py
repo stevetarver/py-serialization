@@ -60,7 +60,10 @@ class Node(NamedTuple):
 
     def is_dir(self):
         return self.tag[0] == "D"
-    
+
+    # def bogus(self):
+    #     print("bogus")
+
     def to_json(self):
         """
         For serialization. If we manually encode our json, we avoid the dict construction

@@ -76,7 +76,8 @@ class Bench:
             for _ in range(self.iterations):
                 start = timer()
                 c.read()
-                # TODO: add translate to better simulate actual operations
+                # TODO: add translate to better simulate actual operations - relatively small cost
+                # c.translate()
                 end = timer()
                 print(f"  {end-start:.3f}")
                 duration += end - start
@@ -123,14 +124,23 @@ def help() -> str:
     return f'''Benchmark read/write operations
 
 USE:
-    Large benchmark for all, case_home, 3 iterations
-      ./bench.py --read --case case_home -t all -i3
+    Validate all formats correctly read/write formats
+        ./bench.py -v
 
-    Benchmark reading case_home, 3 iterations for file types pickle, csv
-      ./bench.py --read --case case_home -t pickle csv msgpack
+    Large benchmark for all, case_home, 3 iterations
+        ./bench.py --read --case case_home -t all -i3
+
+    Benchmark reading case_home, 3 iterations for specific file types
+        ./bench.py --read --case case_home -i3 -t pickle csv msgpack
+
+    A fast, good indicator
+        ./bench.py --read --case case_10000 -i3 -t all
 
     A simpler test case
-      ./bench.py --read --case case_100 -t all
+        ./bench.py --read --case case_100 -t all
+
+    Develop a new serialization protocol - small file, single file type
+        ./bench.py --read --case case_proj -t bson
 
 FILE TYPES:
     {", ".join(sorted(FileType.__members__.keys()))}

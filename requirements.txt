@@ -4,3 +4,6 @@ msgpack
 simplejson
 ujson
 cbor2
+cbor
+python-rapidjson
+python3-protobuf

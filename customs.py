@@ -10,6 +10,9 @@ Serialization concerns
       to translate all existing archives
     - change field order - if we don't store field name information, do we break all existing archives
     - add/remove fields - no field names makes this difficult
+- solid impl - msgpack blows up on large files - need to set max_xxx_len according to file size - case_home blows up
+- format stability - will file format change if version changes. bloscpack announces they may change format with
+  no backwards compatibility. Pickle provides a protocol to version archives.
 
 Lists of protocols
 - protobuf and other fancy things https://gist.github.com/monkeybutter/b91004077be5d73a478a
@@ -18,20 +21,22 @@ Lists of protocols
 import argparse
 import csv
 import json
-
-import simplejson
-import ujson
-import cbor2
-import cbor
 import pickle
+import ujson
 from argparse import RawDescriptionHelpFormatter
 from collections import defaultdict
 from enum import Enum
 from pathlib import Path
 from timeit import default_timer as timer
-from typing import Dict, Union, Callable
+from typing import Callable, Dict, Union
 
+from bson import CodecOptions, BSON, decode_file_iter
+import cbor
+import cbor2
 import msgpack
+import rapidjson
+import simplejson
+from bson.raw_bson import RawBSONDocument
 
 from node import Node, TreeNode
 
@@ -43,12 +48,13 @@ class FileType(Enum):
     Out[20]: './data/pickle/case_100.pickle'
     """
     PICKLE = 'pickle'
-    CBOR = 'CBOR'
-    CBOR2 = 'CBOR2'
+    BSON = 'bson'
+    CBOR = 'cbor'
+    CBOR2 = 'cbor2'
     CSV = 'csv'
     JSON = 'json'
     MSGPACK = 'msgpack'
-    PROTOBUF = 'protobuf'
+    RAPIDJSON = 'rapidjson'
     SIMPLEJSON = 'simplejson'
     UJSON = 'ujson'
     
@@ -116,6 +122,14 @@ class Customs:
     - This class is used in benchmarking serialization - completely writing and reading
       to restore both the TreeNode and id_dict. Converting to a serialization form and
       reconstructing both collections is included in the cost for each encoding.
+      
+    EXCLUDED Formats
+    - PROTOBUF: Maintainers claim "known to be pretty slow at this time"
+            https://github.com/protocolbuffers/protobuf/blob/master/python/README.md
+    - HDF5: Not a good fit: HDF5 datasets have a rigid structure: they are all homogeneous (hyper)rectangular
+            numerical arrays, whereas files in a file system can be anything.
+            Protocol problems: https://cyrille.rossant.net/moving-away-hdf5/
+    - BSON:
     """
     
     def __init__(self, stem: str, source_kind: FileType):
@@ -130,10 +144,14 @@ class Customs:
         # Node.id -> TreeNode (only dirs)
         self.tn_dict: Dict[int, TreeNode] = {}
         
+        # The easiest format to serialize - keep it around just so we can take it out of the equation
+        self.dict_list = None
+        
         # Storing data as a list is 2-3 times slower because of all the dict constructs
         # For simplejson, it does not matter because it stores key names when archiving NT,
         # but it is always slower than others
-        self.json_data_is_list = True
+        # TODO: toggle this to radically change json performance
+        self.json_dict_list = True
     
     def _path(self, kind: FileType=None) -> str:
         if not kind:
@@ -142,7 +160,9 @@ class Customs:
     
     def to_dict_list(self):
         # TODO: If we choose a json, we could manually code a Node export format to avoid dict construction and encoding
-        return [x._asdict() for x in self.id_dict.values()]
+        if not self.dict_list:
+            self.dict_list = [x._asdict() for x in self.id_dict.values()]
+        return self.dict_list
 
     def _json_read(self, fn: str, load_func: Callable) -> Dict[int, Node]:
         """
@@ -150,10 +170,12 @@ class Customs:
         """
         with open(fn, "r") as f:
             self.id_dict = {}
-            if self.json_data_is_list:
+            if self.json_dict_list:
                 for item in load_func(f):
+                    # safer cause key names are included, but slower
                     self.id_dict[item['id']] = Node(**item)
             else:
+                # this is the id_dict, serialzed which makes each node a Tuple - an ordered list
                 for v in load_func(f).values():
                     self.id_dict[v[0]] = Node._make(v)
         return self.id_dict
@@ -177,11 +199,10 @@ class Customs:
         TODO: decide on a best approach
         """
         with open(fn, "w") as f:
-            if self.json_data_is_list:
-                # Slower because of all the dict constructs
-                dump_func(self.to_dict_list(), f)
+            if self.json_dict_list:
+                dump_func(self.to_dict_list(), f, ensure_ascii=True)
             else:
-                dump_func(self.id_dict, f)
+                dump_func(self.id_dict, f, ensure_ascii=True)
 
     def read(self) -> Union[Dict, TreeNode]:
         """
@@ -219,7 +240,7 @@ class Customs:
             # NOTE: simplejson includes key names when serializing NamedTuples
             with open(fn, "r") as f:
                 self.id_dict = {}
-                if self.json_data_is_list:
+                if self.json_dict_list:
                     for item in simplejson.load(f):
                         self.id_dict[item['id']] = Node(**item)
                 else:
@@ -237,6 +258,25 @@ class Customs:
                 self.id_dict = {}
                 for item in cbor.load(f):
                     self.id_dict[item['id']] = Node(**item)
+            return self.id_dict
+        elif self.filetype == FileType.RAPIDJSON:
+            self.id_dict = {}
+            with open(fn, "r") as f:
+                d = rapidjson.Decoder(number_mode=rapidjson.NM_NATIVE)(f)
+                if self.json_dict_list:
+                    for item in d:
+                        # safer cause key names are included, but slower
+                        self.id_dict[item['id']] = Node(**item)
+                else:
+                    # list(self.id_dict.values()) - produces a list of lists
+                    for item in d:
+                        self.id_dict[item[0]] = Node._make(item)
+            return self.id_dict
+        elif self.filetype == FileType.BSON:
+            self.id_dict = {}
+            with open(fn, "rb") as f:
+                for doc in decode_file_iter(f):
+                    self.id_dict[doc['id']] = Node(**doc)
             return self.id_dict
 
     def write(self, kind: FileType) -> None:
@@ -265,23 +305,37 @@ class Customs:
         elif kind == FileType.SIMPLEJSON:
             # NOTE: simplejson includes key names when serializing NamedTuples
             with open(fn, "w") as f:
-                if self.json_data_is_list:
-                    simplejson.dump(list(self.id_dict.values()), f)
+                if self.json_dict_list:
+                    simplejson.dump(list(self.id_dict.values()), f, ensure_ascii=True)
                 else:
-                    simplejson.dump(self.id_dict, f)
+                    simplejson.dump(self.id_dict, f, ensure_ascii=True)
         elif kind == FileType.CBOR2:
             with open(fn, "wb") as f:
                 cbor2.dump(self.to_dict_list(), f)
         elif kind == FileType.CBOR:
             with open(fn, "wb") as f:
                 cbor.dump(self.to_dict_list(), f)
-        # TODO: protobuf: https://developers.google.com/protocol-buffers/docs/pythontutorial
-        #       pyrobuf
+        elif kind == FileType.RAPIDJSON:
+            # https://python-rapidjson.readthedocs.io/en/latest/benchmarks.html
+            # TODO: See this example for possible speed improvement - deeper integration with Node
+            #  https://python-rapidjson.readthedocs.io/en/latest/encoder.html
+            # NOTE: can't use id_dict - keys must be strings
+            #       can't use self.id_dict.values() - not serializable
+            #       list(self.id_dict.values()) produces a list of lists - no keys - very fragile
+            with open(fn, "w") as f:
+                if self.json_dict_list:
+                    rapidjson.Encoder(number_mode=rapidjson.NM_NATIVE, ensure_ascii=False)(self.to_dict_list(), f)
+                else:
+                    rapidjson.Encoder(number_mode=rapidjson.NM_NATIVE, ensure_ascii=False)(list(self.id_dict.values()), f)
+        elif kind == FileType.BSON:
+            with open(fn, "wb") as f:
+                co = CodecOptions(document_class=RawBSONDocument)
+                for node in self.treenode.node_iter():
+                    f.write(BSON.encode(node._asdict(), codec_options=co))
+                
         # TODO: Thrift?
         # TODO: arrow?
-        # TODO: python-rapidjson
-        # TODO: bson
-        # TODO: HDF5
+        # TODO: Node.to_json
 
     def translate(self):
         """
@@ -362,7 +416,7 @@ def main():
     if not ift.exists(args.case):
         print(f"Import file must exist: {ift.path(args.case)}")
         exit(1)
-
+     
     c = Customs(args.case, ift)
     start = timer()
     c1 = c.read()
