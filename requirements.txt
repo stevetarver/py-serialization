@@ -1,9 +1,10 @@
 -c constraints.txt
 
-msgpack
-simplejson
-ujson
-cbor2
 cbor
+cbor2
+msgpack
+pymongo
 python-rapidjson
 python3-protobuf
+simplejson
+ujson

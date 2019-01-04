@@ -1,6 +1,7 @@
 cbor==1.0.0
 cbor2==4.1.2
 msgpack==0.6.0
+pymongo==3.7.2
 python-rapidjson==0.6.3
 python3-protobuf==2.5.0
 simplejson==3.16.0

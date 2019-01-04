@@ -13,26 +13,25 @@ from customs import Customs, FileType
 from node import Node, TreeNode
 
 CASE_INFO = {
-    'case_proj': {'nodes': 64, 'dirs': 15, 'files': 49},
-    'case_100': {'nodes': 117, 'dirs': 35, 'files': 82},
-    'case_200': {'nodes': 225, 'dirs': 35, 'files': 190},
-    'case_300': {'nodes': 333, 'dirs': 56, 'files': 277},
-    'case_400': {'nodes': 431, 'dirs': 61, 'files': 370},
-    'case_500': {'nodes': 512, 'dirs': 45, 'files': 467},
-    'case_750': {'nodes': 827, 'dirs': 87, 'files': 740},
-    'case_1000': {'nodes': 996, 'dirs': 103, 'files': 893},
-    'case_1250': {'nodes': 1294, 'dirs': 83, 'files': 1211},
-    'case_1500': {'nodes': 1554, 'dirs': 122, 'files': 1432},
-    'case_1750': {'nodes': 1787, 'dirs': 141, 'files': 1646},
-    'case_2000': {'nodes': 1993, 'dirs': 149, 'files': 1844},
-    'case_2500': {'nodes': 2534, 'dirs': 140, 'files': 2394},
-    'case_3000': {'nodes': 2951, 'dirs': 166, 'files': 2785},
-    'case_4000': {'nodes': 3977, 'dirs': 216, 'files': 3761},
-    'case_5000': {'nodes': 5035, 'dirs': 289, 'files': 4746},
-    'case_10000': {'nodes': 9651, 'dirs': 1079, 'files': 8572},
-    'case_home': {'nodes': 329267, 'dirs': 51095, 'files': 278172},
+    'case_proj': {'nodes': 22, 'dirs': 6, 'files': 16},
+    'case_100': {'nodes': 98, 'dirs': 35, 'files': 63},
+    'case_200': {'nodes': 206, 'dirs': 35, 'files': 171},
+    'case_300': {'nodes': 315, 'dirs': 56, 'files': 259},
+    'case_400': {'nodes': 413, 'dirs': 61, 'files': 352},
+    'case_500': {'nodes': 515, 'dirs': 45, 'files': 470},
+    'case_750': {'nodes': 832, 'dirs': 87, 'files': 745},
+    'case_1000': {'nodes': 981, 'dirs': 103, 'files': 878},
+    'case_1250': {'nodes': 1278, 'dirs': 83, 'files': 1195},
+    'case_1500': {'nodes': 1540, 'dirs': 122, 'files': 1418},
+    'case_1750': {'nodes': 1773, 'dirs': 141, 'files': 1632},
+    'case_2000': {'nodes': 1980, 'dirs': 149, 'files': 1831},
+    'case_2500': {'nodes': 2553, 'dirs': 140, 'files': 2413},
+    'case_3000': {'nodes': 2971, 'dirs': 166, 'files': 2805},
+    'case_4000': {'nodes': 3995, 'dirs': 216, 'files': 3779},
+    'case_5000': {'nodes': 5056, 'dirs': 289, 'files': 4767},
+    'case_10000': {'nodes': 9847, 'dirs': 1152, 'files': 8695},
+    'case_home': {'nodes': 1030828, 'dirs': 124678, 'files': 906150},
 }
-
 
 # Conditionally exclude directories from target to hit goal node counts
 CPYTHON_DIR_EXCLUSIONS = dict(
@@ -101,10 +100,10 @@ def pickle_dataset(p: Path, case: str, exclusions: Set[str]) -> None:
 def pickle_default_datasets() -> None:
     """ Generate default datasets, for use with other formats """
     config = configparser.ConfigParser()
-    config.read("class-stor.config")
+    config.read("py-serialization.config")
 
     p = Path.cwd()
-    pickle_dataset(p, "case_proj", {"csv", "json", "msgpack", ".git", ".idea", ".pytest_cache", "__pycache__"})
+    pickle_dataset(p, "case_proj", {"data", ".git", ".idea", ".pytest_cache", "__pycache__"})
 
     p = Path(config['generator']['cpython'])
     for case, exclusions in CPYTHON_DIR_EXCLUSIONS.items():
@@ -114,7 +113,7 @@ def pickle_default_datasets() -> None:
     pickle_dataset(p, "case_10000", set())
 
     p = Path.home()
-    pickle_dataset(p, "case_home", {"appomni", "Library", "private"})
+    pickle_dataset(p, "case_home", {"appomni", "Library", "private", ".config", "Pictures", "Movies", "code"})
     
 
 def dir_counts_recurse(node: TreeNode, indent: int = 0) -> None:
@@ -148,7 +147,7 @@ def help():
     return """Collect dir/file metadata and pickle
 
 The 'default' generation creates target sized sets of dir/file data from the cpython/go repo.
-Set the paths to both in class-stor.config
+Set the paths to both in py-serialization.config
 
     ./generator.py -d
 
